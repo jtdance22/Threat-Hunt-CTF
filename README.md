@@ -42,3 +42,23 @@
 
 ## **Starting Point**
 <img width="639" height="233" alt="image" src="https://github.com/user-attachments/assets/44274d0d-4a3a-4ae9-9329-04ce44239dc8" />
+
+### **Findings**
+
+Due to the high volume of activity in the cyber range, I focused on identifying persistence. Instead of scanning broadly for PowerShell usage, I filtered for scheduled task creation events and found two tied to suspicious payloads.
+
+Both tasks used `ONLOGON` triggers and launched PowerShell with execution policy bypasses. The payloads were stored in commonly abused directories: `AppData\Local\Temp` and `Public`. This aligned with CTF intel indicating Temp-based execution around June 15.
+
+### **KQL Query**
+
+```
+// Identify Compromised System
+DeviceProcessEvents
+| where Timestamp > ago(30d)
+| where ProcessCommandLine has "schtasks" and ProcessCommandLine has "/create"
+| project Timestamp, DeviceName, AccountName, ProcessCommandLine
+| order by Timestamp desc
+```
+<img width="1404" height="397" alt="image" src="https://github.com/user-attachments/assets/9a5a0b66-3485-4c60-a074-78ff50702fed" />
+
+
